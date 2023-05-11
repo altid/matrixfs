@@ -17,5 +17,5 @@ var Commands = []*commander.Command{
 		Args:	[]string{"<name>", "<msg>"},
 		Heading:	commander.DefaultGroup,
 		Description: "Send a direct message to the user",
-	}
+	},
 }

@@ -5,21 +5,21 @@ import (
 	"log"
 	"os"
 
-	"github.com/altid/matrixfs"
+	matrixfs "github.com/altid/matrixfs"
 )
 
 var (
-	srv	= flag.String("s", "matrix", "name of service")
+	srv		= flag.String("s", "matrix", "name of service")
 	addr	= flag.String("a", "localhost:564", "listening address")
 	mdns	= flag.Bool("m", false, "enable mDNS broadcast of service")
 	debug	= flag.Bool("d", false, "enable debug printing")
-	lidr	= flag.Bool("l", false, enable logging for main buffers")
+	ldir	= flag.Bool("l", false, "enable logging for main buffers")
 	setup	= flag.Bool("conf", false, "run configuration setup")
 )
 
 func main() {
 	flag.Parse()
-	if(flag.Lookup("h") != nil {
+	if flag.Lookup("h") != nil {
 		flag.Usage()
 		os.Exit(1)
 	}

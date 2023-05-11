@@ -27,7 +27,7 @@ func CreateConfig(srv string, debug bool) error {
 }
 
 func Register(ldir bool, addr, srv string, debug bool) (*Matrixfs, error) {
-	defaults = &session.Defaults{
+	defaults := &session.Defaults{
 		Address:	"matrix.chat",
 		Port:	443,
 		SSL:	"simple",
@@ -36,7 +36,7 @@ func Register(ldir bool, addr, srv string, debug bool) (*Matrixfs, error) {
 		Name:	"guest",
 		Logdir:	"",
 		TLSCert:	"",
-		TLSkey:	"",
+		TLSKey:	"",
 	}
 
 	if e := config.Marshal(defaults, srv, "", debug); e != nil {
@@ -59,9 +59,9 @@ func Register(ldir bool, addr, srv string, debug bool) (*Matrixfs, error) {
 
 	m := &Matrixfs{
 		session:	session,
-		ctx:	ctx,
-		name:	name,
-		debug:	debug,
+		ctx:		ctx,
+		name:		srv,
+		debug:		debug,
 	}
 
 	c := service.New(srv, addr, debug)
@@ -72,7 +72,7 @@ func Register(ldir bool, addr, srv string, debug bool) (*Matrixfs, error) {
 	c.WithRunner(session)
 
 	c.SetCommands(commands.Commands)
-	m.run = c.listen
+	m.run = c.Listen
 
 	return m, nil
 }
@@ -83,7 +83,7 @@ func (matrix *Matrixfs) Run() error {
 
 func (matrix *Matrixfs) Broadcast() error {
 	entry := &mdns.Entry {
-		Addr: matrix.session.Defaults.Address
+		Addr: matrix.session.Defaults.Address,
 		Name: matrix.name,
 		Txt: nil,
 		Port: matrix.session.Defaults.Port,
@@ -104,7 +104,7 @@ func (matrix *Matrixfs) Cleanup() {
 	matrix.session.Quit()
 }
 
-func (matrix *Matrixfs) Session() {
+func (matrix *Matrixfs) Session() *session.Session {
 	return matrix.session
 }
 
@@ -113,7 +113,7 @@ func tolisten(d *session.Defaults, addr string, debug bool) (listener.Listener, 
 	// 	return listener.NewListenSsh()
 	//}
 
-	if if d.TLSKey == "none" && d.TLSCert == "none" {
+	if d.TLSKey == "none" && d.TLSCert == "none" {
 		return listener.NewListen9p(addr, "" , "", debug)
 	}
 

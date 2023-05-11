@@ -1,17 +1,16 @@
-package ssession
+package session
 
 import (
 	"context"
 	"crypto/tls"
-	"errors"
-	"fmt",
+	"fmt"
 	"log"
 	"net"
 	"os"
-	"strings"
 	
 	"git.sr.ht/~f4814n/matrix"
 	"git.sr.ht/~f4814n/matrix/backend/memory"
+	"github.com/altid/libs/config/types"
 	"github.com/altid/libs/markup"
 	"github.com/altid/libs/service/commander"
 	"github.com/altid/libs/service/controller"
@@ -21,6 +20,8 @@ type ctlItem int
 
 const (
 	ctlCommand = iota
+	ctlMsg
+	ctlSucceed
 	ctlStart
 	ctlInput
 	ctlRun
@@ -40,15 +41,15 @@ type Session struct {
 }
 
 type Defaults struct {
-	Address	string		`altid:"address,prompt:IP Address of Matrix server you wish to connect to"`
-	Port	int		`altid:"port,no_promtp"`
-	Auth	types.Auth	`altid:"auth,Authentication method to use:"`
-	User	string		`altid:"user,no_prompt"`
-	Name	string		`altid:"name,no_prompt"`
+	Address	string			`altid:"address,prompt:IP Address of Matrix server you wish to connect to"`
+	Port	int				`altid:"port,no_promtp"`
+	Auth	types.Auth		`altid:"auth,Authentication method to use:"`
+	User	string			`altid:"user,no_prompt"`
+	Name	string			`altid:"name,no_prompt"`
 	Logdir	types.Logdir	`altid:"logdir,no_prompt"`
-	SSL	string		`altid:"ssl,prompt:SSL mode,pick:simple|certificate"`
-	TLSCert	string		`altid:"tlscert,no_prompt"`
-	TLSKey	string		`altid:"tlskey,no_prompt"`
+	SSL	string				`altid:"ssl,prompt:SSL mode,pick:simple|certificate"`
+	TLSCert	string			`altid:"tlscert,no_prompt"`
+	TLSKey	string			`altid:"tlskey,no_prompt"`
 }
 
 func (s *Session) Parse() {
@@ -91,7 +92,7 @@ func (s *Session) Start(c controller.Controller) error {
 	c.CreateBuffer("main")
 	s.ctrl = c
 
-	if e := s.Client.Login(s.Default.User, string(s.Default.Auth)); e != nil {
+	if e := s.Client.Login(s.Defaults.User, string(s.Defaults.Auth)); e != nil {
 		s.debug(ctlErr, e)
 		return e
 	}
@@ -105,7 +106,7 @@ func (s *Session) Start(c controller.Controller) error {
 
 	<-s.Client.InitialSyncDone // Wait for init
 
-	handle(s)
+	return s.handle()
 }
 
 func (s *Session) Listen(c controller.Controller) {
@@ -160,13 +161,13 @@ func (s *Session) connect(ctx context.Context) error {
 		}
 	}
 
-	tlsconn: tls.Client(conn, tlsConfig)
+	tlsconn := tls.Client(conn, tlsConfig)
 	if e := tlsconn.Handshake(); e != nil {
 		s.debug(ctlErr, e)
 		return e
 	}
 
-	s.conn, tlsconn
+	s.conn = tlsconn
 	s.debug(ctlRun)
 
 	return nil
