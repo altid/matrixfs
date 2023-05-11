@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	
+	"git.sr.ht/~f4814n/matrix"
+	"git.sr.ht/~f4814n/matrix/backend/memory"
 	"github.com/altid/libs/markup"
 	"github.com/altid/libs/service/commander"
 	"github.com/altid/libs/service/controller"
@@ -26,7 +28,8 @@ const (
 )
 
 type Session struct {
-	Client	*mautrix.Client
+	Client	*matrix.Client
+	events	chan matrix.Event
 	ctx	context.Context
 	cancel	context.CancelFunc
 	conn	net.Conn
@@ -51,8 +54,9 @@ type Defaults struct {
 func (s *Session) Parse() {
 	s.debug = func(ctlItem, ...interface{}) {}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
-
-	s.conf = whatever { }
+	s.Client = matrix.NewClient(matrix.ClientOpts{Backend: memory.New()})
+	s.events = make(chan matrix.Event)
+	s.Client.Notify(s.events)
 
 	if s.Verbose {
 		s.debug = ctlLogging
@@ -87,13 +91,21 @@ func (s *Session) Start(c controller.Controller) error {
 	c.CreateBuffer("main")
 	s.ctrl = c
 
-	// Looks like we get a Req/Resp login, with types
-	if s.Client, e := mautrix.NewClient(s.Defaults.Server, userId, accessToken?); e != nil {
+	if e := s.Client.Login(s.Default.User, string(s.Default.Auth)); e != nil {
 		s.debug(ctlErr, e)
 		return e
 	}
 
-	return s.Client.Run() // or whatever they have
+	go s.Client.Sync(s.ctx, &matrix.SyncOpts{
+		OnError: func(e error) error {
+			s.debug(ctlErr, e)
+			return nil // continue though
+		},
+	})
+
+	<-s.Client.InitialSyncDone // Wait for init
+
+	handle(s)
 }
 
 func (s *Session) Listen(c controller.Controller) {
