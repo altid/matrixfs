@@ -1,4 +1,4 @@
-# Matrixfs
+# **Work In Progress** Matrixfs
 
 Matrixfs is a file service used to connect to a Matrix network
 `go install github.com/altid/matrixfs@latest`
