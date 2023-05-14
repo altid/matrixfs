@@ -3,8 +3,8 @@ module github.com/altid/matrixfs
 go 1.18
 
 require (
-	git.sr.ht/~f4814n/matrix v0.0.0-20210727154354-e41826da63a9
 	github.com/altid/libs v0.2.4
+	github.com/matrix-org/gomatrix v0.0.0-20220926102614-ceba4d9f7530
 )
 
 require (
