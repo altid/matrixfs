@@ -25,23 +25,23 @@ type Matrixfs struct {
 	ctx	context.Context
 }
 
+var defaults *session.Defaults = &session.Defaults{
+	Address:	"https://matrix.chat",
+	Port:		443,
+	SSL:		"simple",
+	Auth:		"password",
+	User:		"guest",
+	Logdir:		"",
+	TLSCert:	"",
+	TLSKey:		"",
+}
+
 func CreateConfig(srv string, debug bool) error {
-	d := &session.Defaults{}
-	return config.Create(d, srv, "", debug)
+	return config.Create(defaults, srv, "", debug)
 }
 
 func Register(ldir bool, addr string, port int, srv string, debug bool) (*Matrixfs, error) {
 	var err error
-	defaults := &session.Defaults{
-		Address:	"https://matrix.chat",
-		Port:		port,
-		SSL:		"simple",
-		Auth:		"password",
-		User:		"guest",
-		Logdir:		"",
-		TLSCert:	"",
-		TLSKey:		"",
-	}
 	if e := config.Marshal(defaults, srv, "", debug); e != nil {
 		return nil, e
 	}
@@ -76,13 +76,11 @@ func (matrix *Matrixfs) Run() error {
 }
 
 func (matrix *Matrixfs) Broadcast() error {
-	entry := &mdns.Entry {
-		Addr: matrix.session.Defaults.Address,
-		Name: matrix.name,
-		Txt: nil,
-		Port: matrix.session.Defaults.Port,
+	url := fmt.Sprintf("%s:%d", matrix.session.Defaults.Address, matrix.session.Defaults.Port)
+	entry, err := mdns.ParseURL(url, matrix.name)
+	if err != nil {
+		return err
 	}
-
 	if e := mdns.Register(entry); e != nil {
 		return e
 	}
@@ -117,10 +115,10 @@ func tolisten(d *session.Defaults, addr string, port int, debug bool) (listener.
 
 func tostore(d *session.Defaults, ldir, debug bool) store.Filer {
 	if ldir {
-		return store.NewLogStore(d.Logdir.String(), debug)
+		return store.NewLogstore(d.Logdir.String(), debug)
 	}
 
-	return store.NewRamStore(debug)
+	return store.NewRamstore(debug)
 }
 
 func toaddr(d *session.Defaults) (string, error) {

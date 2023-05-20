@@ -2,15 +2,20 @@ package session
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 
 	"github.com/altid/libs/config/types"
 	"github.com/altid/libs/markup"
 	"github.com/altid/libs/service/commander"
 	"github.com/altid/libs/service/controller"
-	"github.com/matrix-org/gomatrix"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 type ctlItem int
@@ -23,6 +28,8 @@ const (
 	ctlInput
 	ctlLogin
 	ctlLoginReq
+	ctlInfo
+	ctlMember
 	ctlRun
 	ctlErr
 )
@@ -32,10 +39,10 @@ type Session struct {
 	Verbose		bool
 	Ctx			context.Context
 	cancel		context.CancelFunc
-	client		*gomatrix.Client
+	client		*mautrix.Client
 	ctrl		controller.Controller
 	rooms		map[string]string
-	login		*gomatrix.RespLogin
+	login		*mautrix.RespLogin
 	debug		func(ctlItem, ...interface{})
 }
 
@@ -64,11 +71,13 @@ func NewSession(defaults *Defaults, verbose bool) *Session {
 
 func (s *Session) Parse() {
 	var err error
-	s.debug = func(ctlItem, ...interface{}) {}
-	if s.client, err = gomatrix.NewClient(s.Defaults.Address, "", ""); err != nil {
+	s.debug = func(ctlItem, ...any) {}
+	user := id.NewUserID(s.Defaults.Address, s.Defaults.User)
+	if s.client, err = mautrix.NewClient(s.Defaults.Address, user, ""); err != nil {
 		s.debug(ctlErr, err)
 		os.Exit(1)
 	}
+
 	if s.Verbose {
 		s.debug = ctlLogging
 	}
@@ -91,7 +100,7 @@ func (s *Session) Quit() {
 }
 
 func (s *Session) Handle(bufname string, l *markup.Lexer) error {
-	// 
+	// TODO
 	return nil
 }
 
@@ -99,11 +108,15 @@ func (s *Session) Start(c controller.Controller) error {
 	var e error
 	s.ctrl = c
 	s.debug(ctlSucceed, "connection")
+	if e := s.connect(); e != nil {
+		return e
+	}
+	
 	// If we're a guest user, create a guest session
 	if s.Defaults.User == "guest" {
-		var resp *gomatrix.RespRegister
+		var resp *mautrix.RespRegister
 		s.debug(ctlStart, "registration")
-		reg := &gomatrix.ReqRegister{
+		reg := &mautrix.ReqRegister{
 			Username: s.Defaults.User,
 			Password: string(s.Defaults.Auth),
 			DeviceID: "altid/matrixfs - guest",
@@ -112,14 +125,17 @@ func (s *Session) Start(c controller.Controller) error {
 			return e
 		}
 		s.login.DeviceID = resp.DeviceID
-		s.login.HomeServer = resp.HomeServer
+		//s.login.HomeServer = resp.HomeServer
 		s.login.UserID = resp.UserID
 		s.login.AccessToken = resp.AccessToken
 	} else {
-		req := &gomatrix.ReqLogin{
-			Type:	 	"m.login.password",
+		req := &mautrix.ReqLogin{
+			Type:	 	mautrix.AuthTypePassword,
 			Password:	string(s.Defaults.Auth),
-			User:	 	s.Defaults.User,
+			Identifier:	 mautrix.UserIdentifier{
+				Type:	mautrix.IdentifierTypeUser,
+				User: s.Defaults.User},
+			StoreCredentials: true,
 			DeviceID:	"altid/matrixfs",
 		}
 		s.debug(ctlLoginReq, req)
@@ -127,24 +143,29 @@ func (s *Session) Start(c controller.Controller) error {
 			return e
 		}
 	}
+	
 	s.debug(ctlLogin, s.login)
-	s.client.SetCredentials(s.login.UserID, s.login.AccessToken)
+	s.client.FullSyncRequest(mautrix.ReqSync{
+		Context: s.Ctx,
+		
+	})
 	// Sync handlers for the message types we need
-	sync := s.client.Syncer.(*gomatrix.DefaultSyncer)
-	sync.OnEventType("m.room.redaction", s.redaction)
-	sync.OnEventType("m.room.message", s.message)
-	sync.OnEventType("m.room.member", s.member)
-	sync.OnEventType("m.room.avatar", s.avatar)
-	sync.OnEventType("m.room.name", s.name)
-	sync.OnEventType("m.canonical.alias", s.name)
-	sync.OnEventType("m.room.topic", s.title)
-	sync.OnEventType("m.room.create", s.create)
-	// Call sync in a loop, check if we're done
+	sync := s.client.Syncer.(*mautrix.DefaultSyncer)
+	sync.OnEventType(event.EventMessage, s.message)
+	sync.OnEventType(event.StateRoomName, s.name)
+	sync.OnEventType(event.StateTopic, s.title)
+	sync.OnEventType(event.StateRoomAvatar, s.avatar)
+	sync.OnEventType(event.StateCreate, s.create)
+	sync.OnEventType(event.StateMember, s.member)
+	sync.OnEventType(event.EventRedaction, s.redaction)
+
 	// Sync will call our event callbacks for us and keep up to date with the server
 	s.debug(ctlSucceed, "Add sync events")
 	ec := make(chan error)
 	go func(ec chan error) {
-		ec <- s.client.Sync()
+		for {
+			ec <- s.client.Sync()
+		}
 	}(ec)
 	for {
 		select {
@@ -153,7 +174,7 @@ func (s *Session) Start(c controller.Controller) error {
 			return nil
 		case e = <-ec:
 			// TODO: Handle err appropriately
-			s.debug(ctlErr, e)
+			return e
 		}
 	}
 }
@@ -175,58 +196,51 @@ func (s *Session) Command(cmd *commander.Command) error {
 	return s.Run(s.ctrl, cmd)
 }
 
-func (s *Session) title(ev *gomatrix.Event) {
-	if s.rooms[ev.RoomID] == "unknown" {
-		log.Fatal("Title event before room name event")
-	}
-	title, err := s.ctrl.TitleWriter(s.rooms[ev.RoomID])
+func (s *Session) title(src mautrix.EventSource, ev *event.Event) {
+	title, err := s.ctrl.TitleWriter(s.rooms[ev.RoomID.String()])
 	if err != nil {
 		s.debug(ctlErr, err)
 		return
 	}
-	if t, ok := ev.Content["topic"].(string); ok {
-		fmt.Fprint(title, t)
-	}
+	fmt.Fprint(title, ev.Content.AsTopic().Topic)
 }
 
-func (s *Session) create(ev *gomatrix.Event) {
+func (s *Session) create(src mautrix.EventSource, ev *event.Event) {
 	// We don't have the room name available here
 	// Set to unknown, and try to find out before we log any real data
-	if room, ok := s.rooms[ev.RoomID]; ok {
+	if room, ok := s.rooms[ev.RoomID.String()]; ok {
 		if room == "unknown" {
 			log.Fatal("Multiple create events, unexpected")
 		}
 	}
-	s.rooms[ev.RoomID] = "unknown"
+	s.rooms[ev.RoomID.String()] = "unknown"
 	//if e := s.ctrl.CreateBuffer(ev.RoomID); e != nil {
 	//	s.debug(ctlErr, e)
 	//}
-}
-
-func (s *Session) name(ev *gomatrix.Event) {
-	switch(ev.Type) {
-	case "m.room.name":
-		if name, ok := ev.Content["name"].(string); ok {
-			s.rooms[ev.RoomID] = name
-		}
-	case "m.canonical.alias":
-		// Only set the alias if we don't have a good name
-		if name, ok := ev.Content["alias"].(string); ok {
-			if s.rooms[ev.RoomID] != "unknown" {
-				s.rooms[ev.RoomID] = name
-			}
-		}
+	if e := s.client.MarkRead(ev.RoomID, ev.ID); e != nil {
+		s.debug(ctlErr, e)
 	}
 }
 
-func (s *Session) avatar(ev *gomatrix.Event) {
-	// TODO: Build our title with an image instead
+func (s *Session) name(src mautrix.EventSource, ev *event.Event) {
+	name := ev.Content.AsRoomName().Name
+	s.rooms[ev.RoomID.String()] = name
+	s.ctrl.CreateBuffer(name)
+	if e := s.client.MarkRead(ev.RoomID, ev.ID); e != nil {
+		s.debug(ctlErr, e)
+	}
 }
 
-func (s *Session) redaction(ev *gomatrix.Event) {
+func (s *Session) avatar(src mautrix.EventSource, ev *event.Event) {
+	// TODO: Build our title with an image instead
+	s.client.MarkRead(ev.RoomID, ev.ID)
+}
+
+func (s *Session) redaction(src mautrix.EventSource, ev *event.Event) {
 	if(ev.Sender == s.login.UserID) {
 		return
 	}
+	/*
 	from, ok := ev.PrevContent["ID"].(string)
 	if !ok {
 		return
@@ -251,13 +265,18 @@ func (s *Session) redaction(ev *gomatrix.Event) {
 			break
 		}
 	}
+	*/
 	if e := s.client.MarkRead(ev.RoomID, ev.ID); e != nil {
 		s.debug(ctlErr, e)
 	}
 }
 
-func (s *Session) member(ev *gomatrix.Event) {
-	switch(ev.Content["membership"]) {
+func (s *Session) member(src mautrix.EventSource, ev *event.Event) {
+	if ev.Sender == s.login.UserID {
+		return
+	}
+	mem := ev.Content.AsMember()
+	switch(mem.Membership) {
 	case "join":
 		// Update member list
 		// Write out
@@ -273,10 +292,24 @@ func (s *Session) member(ev *gomatrix.Event) {
 	}
 }
 
-func (s *Session) message(ev *gomatrix.Event) {
+func (s *Session) message(src mautrix.EventSource, ev *event.Event) {
 	if(ev.Sender == s.login.UserID) {
 		return
 	}
+	room := s.rooms[ev.RoomID.String()]
+	// We don't really want this, we lose messages, but we need a good name
+	if room == "unknown" {
+		return
+	}
+	mw, err := s.ctrl.MainWriter(room)
+	if err != nil {
+		return
+	}
+
+	fmt.Fprintf(mw, ev.Content.AsMessage().FormattedBody)
+	mw.Close()
+	//msg := ev.Content.AsMessage()
+	//msg.FormattedBody
 	// Check mtype, handle accordingly
 	// Write out
 	if e := s.client.MarkRead(ev.RoomID, ev.ID); e != nil {
@@ -284,28 +317,72 @@ func (s *Session) message(ev *gomatrix.Event) {
 	}
 }
 
+func (s *Session) connect() error {
+	switch s.Defaults.SSL {
+	case "none":
+	case "simple":
+		var conn *tls.Conn
+		var err error
+		tlsConfig := http.DefaultTransport.(*http.Transport).TLSClientConfig
+		s.client.Client = &http.Client{
+			Transport: &http.Transport{
+				DialTLS: func(network, addr string) (net.Conn, error) {
+					conn, err = tls.Dial(network, addr, tlsConfig)
+					return conn, err
+				},
+			},
+		}
+		s.debug(ctlSucceed, "set up TLS")
+		return nil
+	/*case "certificate":
+		cert, err := tls.LoadX509KeyPair(s.Defaults.TLSCert, s.Defaults.TLSKey)
+		if err != nil {
+			s.debug(ctlErr, err)
+			return err
+		}
+
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{
+				cert,
+			},
+			ServerName: dialString,
+		}
+		*/
+	}
+
+	return nil
+}
+
 func ctlLogging(ctl ctlItem, args ...interface{}) {
 	l := log.New(os.Stdout, "matrixfs ", 0)
 	switch ctl {
 	case ctlRun:
 		l.Printf("running")
+	case ctlInfo:
+		l.Printf("info: %v", args)
 	case ctlStart:
 		l.Printf("starting %s", args[0])
 	case ctlSucceed:
 		l.Printf("%s succeeded\n", args[0])
 	case ctlInput:
 		l.Printf("input: data=\"%s\" bufname=\"%s\"", args[0], args[1])
+	case ctlMember:
+		if m, ok := args[0].(*event.Event); ok {
+			l.Printf("member name=\"%s\"", m.Sender)
+		}
+	case ctlMsg:
+		l.Printf("message: \"%s\"", args[0])
 	case ctlCommand:
 		if m, ok := args[0].(*commander.Command); ok {
 			l.Printf("command name=\"%s\" heading=\"%d\" sender=\"%s\" args=\"%s\" from=\"%s\"", m.Name, m.Heading, m.Sender, m.Args, m.From)
 		}
 	case ctlLogin:
-		if m, ok := args[0].(*gomatrix.RespLogin); ok {
-			l.Printf("login success: userID=\"%s\" homeserver=\"%s\" deviceID=\"%s\"", m.UserID, m.HomeServer, m.DeviceID)
+		if m, ok := args[0].(*mautrix.RespLogin); ok {
+			l.Printf("login success: userID=\"%s\" deviceID=\"%s\"", m.UserID, m.DeviceID)
 		}
 	case ctlLoginReq:
-		if m, ok := args[0].(*gomatrix.ReqLogin); ok {
-			l.Printf("login attempt: user=\"%s\" pass=\"%s\" type=\"%s\" deviceID=\"%s\"", m.User, m.Password, m.Type, m.DeviceID)
+		if m, ok := args[0].(*mautrix.ReqLogin); ok {
+			l.Printf("login attempt: user=\"%s\" pass=\"%s\" type=\"%s\" deviceID=\"%s\"", m.Identifier.User, m.Password, m.Type, m.DeviceID)
 		}
 	case ctlErr:
 		if m, ok := args[0].(error); ok {
