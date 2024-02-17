@@ -35,37 +35,37 @@ const (
 )
 
 type Session struct {
-	Defaults	*Defaults
-	Verbose		bool
-	Ctx			context.Context
-	cancel		context.CancelFunc
-	client		*mautrix.Client
-	ctrl		controller.Controller
-	rooms		map[string]string
-	login		*mautrix.RespLogin
-	debug		func(ctlItem, ...interface{})
+	Defaults *Defaults
+	Verbose  bool
+	Ctx      context.Context
+	cancel   context.CancelFunc
+	client   *mautrix.Client
+	ctrl     controller.Controller
+	rooms    map[string]string
+	login    *mautrix.RespLogin
+	debug    func(ctlItem, ...any)
 }
 
 type Defaults struct {
-	Address	string			`altid:"address,prompt:IP Address of Matrix server you wish to connect to"`
-	Auth	types.Auth		`altid:"auth,prompt:Authentication method to use"`
-	User	string			`altid:"user,prompt:Matrix username"`
-	Logdir	types.Logdir	`altid:"logdir,no_prompt"`
-	Port	int				`altid:"port,no_prompt"`
-	SSL		string			`altid:"ssl,prompt:SSL mode,pick:simple|certificate"`
-	TLSCert	string			`altid:"tlscert,no_prompt"`
-	TLSKey	string			`altid:"tlskey,no_prompt"`
+	Address string       `altid:"address,prompt:IP Address of Matrix server you wish to connect to"`
+	Auth    types.Auth   `altid:"auth,prompt:Authentication method to use"`
+	User    string       `altid:"user,prompt:Matrix username"`
+	Logdir  types.Logdir `altid:"logdir,no_prompt"`
+	Port    int          `altid:"port,no_prompt"`
+	SSL     string       `altid:"ssl,prompt:SSL mode,pick:simple|certificate"`
+	TLSCert string       `altid:"tlscert,no_prompt"`
+	TLSKey  string       `altid:"tlskey,no_prompt"`
 }
 
 // Sessions can be closed by the parent, or in our Quit() handler
 func NewSession(defaults *Defaults, verbose bool) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Session{
-		Ctx:		ctx,
-		cancel:		cancel,
-		Defaults:	defaults,
-		Verbose:	verbose,
-		rooms: 		make(map[string]string),
+		Ctx:      ctx,
+		cancel:   cancel,
+		Defaults: defaults,
+		Verbose:  verbose,
+		rooms:    make(map[string]string),
 	}
 }
 
@@ -111,7 +111,7 @@ func (s *Session) Start(c controller.Controller) error {
 	if e := s.connect(); e != nil {
 		return e
 	}
-	
+
 	// If we're a guest user, create a guest session
 	if s.Defaults.User == "guest" {
 		var resp *mautrix.RespRegister
@@ -125,30 +125,29 @@ func (s *Session) Start(c controller.Controller) error {
 			return e
 		}
 		s.login.DeviceID = resp.DeviceID
-		//s.login.HomeServer = resp.HomeServer
 		s.login.UserID = resp.UserID
 		s.login.AccessToken = resp.AccessToken
 	} else {
 		req := &mautrix.ReqLogin{
-			Type:	 	mautrix.AuthTypePassword,
-			Password:	string(s.Defaults.Auth),
-			Identifier:	 mautrix.UserIdentifier{
-				Type:	mautrix.IdentifierTypeUser,
-				User: s.Defaults.User},
+			Type:             mautrix.AuthTypePassword,
+			Password:         string(s.Defaults.Auth),
 			StoreCredentials: true,
-			DeviceID:	"altid/matrixfs",
+			DeviceID:         "altid/matrixfs",
+			Identifier: mautrix.UserIdentifier{
+				Type: mautrix.IdentifierTypeUser,
+				User: s.Defaults.User,
+			},
 		}
 		s.debug(ctlLoginReq, req)
 		if s.login, e = s.client.Login(req); e != nil {
 			return e
 		}
 	}
-	
+
 	s.debug(ctlLogin, s.login)
-	s.client.FullSyncRequest(mautrix.ReqSync{
-		Context: s.Ctx,
-		
-	})
+	//s.client.FullSyncRequest(mautrix.ReqSync{
+	//	Context: s.Ctx,
+	//})
 	// Sync handlers for the message types we need
 	sync := s.client.Syncer.(*mautrix.DefaultSyncer)
 	sync.OnEventType(event.EventMessage, s.message)
@@ -197,6 +196,9 @@ func (s *Session) Command(cmd *commander.Command) error {
 }
 
 func (s *Session) title(src mautrix.EventSource, ev *event.Event) {
+	if ev.RoomID == "" {
+		return
+	}
 	title, err := s.ctrl.TitleWriter(s.rooms[ev.RoomID.String()])
 	if err != nil {
 		s.debug(ctlErr, err)
@@ -237,11 +239,11 @@ func (s *Session) avatar(src mautrix.EventSource, ev *event.Event) {
 }
 
 func (s *Session) redaction(src mautrix.EventSource, ev *event.Event) {
-	if(ev.Sender == s.login.UserID) {
+	if ev.Sender == s.login.UserID {
 		return
 	}
-	/*
-	from, ok := ev.PrevContent["ID"].(string)
+	/* Currently this is broken
+	from, ok := ev.Unsigned.PrevContent["ID"].(string)
 	if !ok {
 		return
 	}
@@ -255,7 +257,7 @@ func (s *Session) redaction(src mautrix.EventSource, ev *event.Event) {
 	for _, event := range msg.Chunk {
 		if event.ID == ev.Redacts {
 			if room, ok := s.rooms[event.RoomID]; ok {
-				mw, err := s.ctrl.MainWriter(room)
+				mw, err := s.ctrl.FeedWriter(room)
 				if err != nil {
 					s.debug(ctlErr, err)
 					break
@@ -276,12 +278,12 @@ func (s *Session) member(src mautrix.EventSource, ev *event.Event) {
 		return
 	}
 	mem := ev.Content.AsMember()
-	switch(mem.Membership) {
+	switch mem.Membership {
 	case "join":
 		// Update member list
 		// Write out
 	case "invite":
-		// Is this us? If so, notify; sending a /join will attach to this room. 
+		// Is this us? If so, notify; sending a /join will attach to this room.
 		// We may want to alias to something simple to type, or even
 		// just handle the very last invite by default
 	case "leave":
@@ -293,7 +295,7 @@ func (s *Session) member(src mautrix.EventSource, ev *event.Event) {
 }
 
 func (s *Session) message(src mautrix.EventSource, ev *event.Event) {
-	if(ev.Sender == s.login.UserID) {
+	if ev.Sender == s.login.UserID {
 		return
 	}
 	room := s.rooms[ev.RoomID.String()]
@@ -301,7 +303,7 @@ func (s *Session) message(src mautrix.EventSource, ev *event.Event) {
 	if room == "unknown" {
 		return
 	}
-	mw, err := s.ctrl.MainWriter(room)
+	mw, err := s.ctrl.FeedWriter(room)
 	if err != nil {
 		return
 	}
@@ -334,7 +336,7 @@ func (s *Session) connect() error {
 		}
 		s.debug(ctlSucceed, "set up TLS")
 		return nil
-	/*case "certificate":
+		/*case "certificate":
 		cert, err := tls.LoadX509KeyPair(s.Defaults.TLSCert, s.Defaults.TLSKey)
 		if err != nil {
 			s.debug(ctlErr, err)
@@ -353,7 +355,7 @@ func (s *Session) connect() error {
 	return nil
 }
 
-func ctlLogging(ctl ctlItem, args ...interface{}) {
+func ctlLogging(ctl ctlItem, args ...any) {
 	l := log.New(os.Stdout, "matrixfs ", 0)
 	switch ctl {
 	case ctlRun:

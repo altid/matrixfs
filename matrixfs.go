@@ -1,4 +1,4 @@
-package ircfs
+package matrixfs
 
 import (
 	"context"
@@ -17,23 +17,23 @@ import (
 )
 
 type Matrixfs struct {
-	run	func() error
-	session	*session.Session
-	name	string
-	debug	bool
-	mdns	*mdns.Entry
-	ctx	context.Context
+	run     func() error
+	session *session.Session
+	name    string
+	debug   bool
+	mdns    *mdns.Entry
+	ctx     context.Context
 }
 
 var defaults *session.Defaults = &session.Defaults{
-	Address:	"https://matrix.chat",
-	Port:		443,
-	SSL:		"simple",
-	Auth:		"password",
-	User:		"guest",
-	Logdir:		"",
-	TLSCert:	"",
-	TLSKey:		"",
+	Address: "https://matrix.chat",
+	Port:    443,
+	SSL:     "simple",
+	Auth:    "password",
+	User:    "guest",
+	Logdir:  "",
+	TLSCert: "",
+	TLSKey:  "",
 }
 
 func CreateConfig(srv string, debug bool) error {
@@ -56,9 +56,9 @@ func Register(ldir bool, addr string, port int, srv string, debug bool) (*Matrix
 	session := session.NewSession(defaults, debug)
 	session.Parse()
 	m := &Matrixfs{
-		session:	session,
-		name:		srv,
-		debug:		debug,
+		session: session,
+		name:    srv,
+		debug:   debug,
 	}
 	c := service.New(srv, addr, debug)
 	c.WithListener(l)
@@ -107,7 +107,7 @@ func tolisten(d *session.Defaults, addr string, port int, debug bool) (listener.
 
 	dial := fmt.Sprintf("%s:%d", addr, port)
 	if d.TLSKey == "none" && d.TLSCert == "none" {
-		return listener.NewListen9p(dial, "" , "", debug)
+		return listener.NewListen9p(dial, "", "", debug)
 	}
 
 	return listener.NewListen9p(dial, d.TLSCert, d.TLSKey, debug)
@@ -127,7 +127,7 @@ func toaddr(d *session.Defaults) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if(!dial.IsAbs()) {
+	if !dial.IsAbs() {
 		dial.Scheme = "https"
 		// Because... adding a scheme doesn't set the host correctly
 		dial, _ = url.Parse(dial.String())
